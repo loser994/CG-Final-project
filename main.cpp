@@ -9,7 +9,7 @@
 #include "shader_m.h"
 #include "camera.h"
 #include "model.h"
-
+#include "particle.h"
 #include <iostream>
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
@@ -32,7 +32,8 @@ bool firstMouse = true;
 // timing
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
-
+//lighting
+glm::vec3 lightPos(1.2f, 1.0f, 2.0f);
 int main()
 {
     // glfw: initialize and configure
@@ -78,12 +79,14 @@ int main()
     // build and compile shaders
     // -------------------------
     // Shader shader("src/6.1.cubemaps.vs", "src/6.1.cubemaps.fs");
+    
     Shader skyboxShader("shaders/6.1.skybox.vs", "shaders/6.1.skybox.fs");
-
+    Shader lightingShader("5.2.light_casters.vs", "5.2.light_casters.fs");
+    Shader lightCubeShader("5.2.light_cube.vs", "5.2.light_cube.fs");
     // set up vertex data (and buffer(s)) and configure vertex attributes
-    // ------------------------------------------------------------------
-    //float cubeVertices[] = {
-    //    // positions          // texture Coords
+     //------------------------------------------------------------------
+    //float cubevertices[] = {
+    //    // positions          // texture coords
     //    -0.5f, -0.5f, -0.5f,  0.0f, 0.0f,
     //     0.5f, -0.5f, -0.5f,  1.0f, 0.0f,
     //     0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
@@ -191,7 +194,7 @@ int main()
     glBufferData(GL_ARRAY_BUFFER, sizeof(skyboxVertices), &skyboxVertices, GL_STATIC_DRAW);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-
+    
     // load textures
     // -------------
     unsigned int cubeTexture = loadTexture("resources/textures/container.jpg");
@@ -215,6 +218,26 @@ int main()
     skyboxShader.use();
     skyboxShader.setInt("skybox", 0);
 
+    // second, configure the light's VAO (VBO stays the same; the vertices are the same for the light object which is also a 3D cube)
+    unsigned int lightCubeVAO;
+    glGenVertexArrays(1, &lightCubeVAO);
+    glBindVertexArray(lightCubeVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, skyboxVBO);
+    // note that we update the lamp's position attribute's stride to reflect the updated buffer data
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
+    
+    glEnableVertexAttribArray(0);
+
+    // load textures (we now use a utility function to keep the code more organized)
+   // -----------------------------------------------------------------------------
+    unsigned int diffuseMap = loadTexture("resources/textures/container2.png");
+    unsigned int specularMap = loadTexture("resources/textures/container2_specular.png");
+
+    // shader configuration
+    // --------------------
+    lightingShader.use();
+    lightingShader.setInt("material.diffuse", 0);
+    lightingShader.setInt("material.specular", 1);
     // render loop
     // -----------
     while (!glfwWindowShouldClose(window))
@@ -235,18 +258,46 @@ int main()
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         // draw scene as normal
-        //shader.use();
-        glm::mat4 model = glm::mat4(1.0f);
-        glm::mat4 view = camera.GetViewMatrix();
+       
+
+        // be sure to activate shader when setting uniforms/drawing objects
+        lightingShader.use();
+        lightingShader.setVec3("light.position", lightPos);
+        lightingShader.setVec3("viewPos", camera.Position);
+
+        // light properties
+        lightingShader.setVec3("light.ambient", 0.2f, 0.2f, 0.2f);
+        lightingShader.setVec3("light.diffuse", 0.5f, 0.5f, 0.5f);
+        lightingShader.setVec3("light.specular", 1.0f, 1.0f, 1.0f);
+        lightingShader.setFloat("light.constant", 1.0f);
+        lightingShader.setFloat("light.linear", 0.09f);
+        lightingShader.setFloat("light.quadratic", 0.032f);
+
+        // material properties
+        lightingShader.setFloat("material.shininess", 32.0f);
+        // view/projection transformations
         glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
+        glm::mat4 view = camera.GetViewMatrix();
+        lightingShader.setMat4("projection", projection);
+        lightingShader.setMat4("view", view);
+
+        // world transformation
+        glm::mat4 model = glm::mat4(1.0f);
+        lightingShader.setMat4("model", model);
+        // bind diffuse map
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, diffuseMap);
+        // bind specular map
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, specularMap);
         /*shader.setMat4("model", model);
         shader.setMat4("view", view);
         shader.setMat4("projection", projection);*/
-        // cubes
-        //glBindVertexArray(cubeVAO);
-        //glActiveTexture(GL_TEXTURE0);
-        //glBindTexture(GL_TEXTURE_2D, cubeTexture);
-        //glDrawArrays(GL_TRIANGLES, 0, 36);
+         //cubes
+        /*glBindVertexArray(cubeVAO);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, cubeTexture);
+        glDrawArrays(GL_TRIANGLES, 0, 36);*/
         //glBindVertexArray(0);
 
         // draw skybox as last
@@ -255,14 +306,31 @@ int main()
         view = glm::mat4(glm::mat3(camera.GetViewMatrix())); // remove translation from the view matrix
         skyboxShader.setMat4("view", view);
         skyboxShader.setMat4("projection", projection);
+        model = glm::mat4(1.0f);
+        model = glm::translate(model, lightPos);
+        model = glm::scale(model, glm::vec3(0.2f)); // a smaller cube
+        skyboxShader.setMat4("model", model);
         // skybox cube
         glBindVertexArray(skyboxVAO);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_CUBE_MAP, cubemapTexture);
         glDrawArrays(GL_TRIANGLES, 0, 36);
-        glBindVertexArray(0);
-        glDepthFunc(GL_LESS); // set depth function back to default
 
+        
+        // also draw the lamp object
+        lightCubeShader.use();
+        lightCubeShader.setMat4("projection", projection);
+        lightCubeShader.setMat4("view", view);
+        model = glm::mat4(1.0f);
+        model = glm::translate(model, lightPos);
+        model = glm::scale(model, glm::vec3(0.2f)); // a smaller cube
+        lightCubeShader.setMat4("model", model);
+
+        glBindVertexArray(lightCubeVAO);
+        glDrawArrays(GL_TRIANGLES, 0, 36);
+
+        
+       
         // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
         // -------------------------------------------------------------------------------
         glfwSwapBuffers(window);
